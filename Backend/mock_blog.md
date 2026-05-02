@@ -1,0 +1,1 @@
+Mock text with [[IMAGE_1]]
