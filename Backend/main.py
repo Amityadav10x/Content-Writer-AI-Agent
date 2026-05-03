@@ -136,6 +136,8 @@ async def run_agent(job_id: str, topic: str, as_of: Optional[str]):
                 if "plan" in updates:
                     jobs[job_id]["result"]["plan"] = updates["plan"].model_dump() if hasattr(updates["plan"], "model_dump") else updates["plan"]
                 
+                if "queries" in updates:
+                    jobs[job_id]["result"]["queries"] = updates["queries"]
                 if "final" in updates:
                     jobs[job_id]["result"]["final"] = updates["final"]
                 

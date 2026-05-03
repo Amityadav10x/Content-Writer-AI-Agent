@@ -1,2 +1,2 @@
 .env
-git add .gitignore
+__pycache__/

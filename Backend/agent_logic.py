@@ -116,7 +116,7 @@ class State(TypedDict):
 # -----------------------------
 # 2) LLM
 # -----------------------------
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+llm = ChatGoogleGenerativeAI(model="gemini-flash-latest")
 
 # -----------------------------
 # 3) Router
@@ -168,8 +168,14 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
     if not os.getenv("TAVILY_API_KEY"):
         return []
     try:
-        from langchain_community.tools.tavily_search import TavilySearchResults  # type: ignore
-        tool = TavilySearchResults(max_results=max_results)
+        # Try modern import first
+        try:
+            from langchain_tavily import TavilySearchResults
+            tool = TavilySearchResults(max_results=max_results)
+        except ImportError:
+            from langchain_community.tools.tavily_search import TavilySearchResults
+            tool = TavilySearchResults(max_results=max_results)
+            
         results = tool.invoke({"query": query})
         out: List[dict] = []
         for r in results or []:
@@ -183,7 +189,8 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
                 }
             )
         return out
-    except Exception:
+    except Exception as e:
+        print(f"Tavily error: {e}")
         return []
 
 def _iso_to_date(s: Optional[str]) -> Optional[date]:
@@ -240,7 +247,7 @@ def research_node(state: State) -> dict:
         cutoff = as_of - timedelta(days=int(state["recency_days"]))
         evidence = [e for e in evidence if (d := _iso_to_date(e.published_at)) and d >= cutoff]
 
-    return {"evidence": evidence}
+    return {"evidence": evidence, "queries": queries}
 
 # -----------------------------
 # 5) Orchestrator (Plan)
@@ -315,25 +322,25 @@ def fanout(state: State):
 # 7) Worker
 # -----------------------------
 WORKER_SYSTEM = """You are a senior technical writer and developer advocate.
-Write ONE section of a technical blog post in Markdown.
+Write ONE section of a high-fidelity technical blog post in Markdown.
+
+Formatting Excellence:
+- Use clear, descriptive headers (## Title).
+- Use bold text for key concepts and technical terms.
+- Use bullet points and numbered lists to break up complex information.
+- Ensure smooth transitions between paragraphs.
+- Keep paragraphs focused and relatively short for readability.
+- If citations are needed, use [Source Name](URL) format inline.
 
 Constraints:
-- Cover ALL bullets in order.
-- Target words ±15%.
-- Output only section markdown starting with "## <Section Title>".
+- Cover ALL bullets provided in the task specification.
+- Target words ±15% of the requested count.
+- Output ONLY the section markdown.
 
-Scope guard:
-- If blog_kind=="news_roundup", do NOT drift into tutorials (scraping/RSS/how to fetch).
-  Focus on events + implications.
-
-Grounding:
-- If mode=="open_book": do not introduce any specific event/company/model/funding/policy claim unless supported by provided Evidence URLs.
-  For each supported claim, attach a Markdown link ([Source](URL)).
-  If unsupported, write "Not found in provided sources."
-- If requires_citations==true (hybrid tasks): cite Evidence URLs for external claims.
-
-Code:
-- If requires_code==true, include at least one minimal snippet.
+Scope & Grounding:
+- If blog_kind=="news_roundup", focus on events, implications, and timelines. Avoid "How-to" drift.
+- If mode=="open_book", do not make unsupported claims. Every factual claim about models/companies/tech must have an inline citation from the Evidence provided.
+- If unsupported by evidence, state "Information not available in current research traces."
 """
 
 def worker_node(payload: dict) -> dict:
@@ -347,7 +354,7 @@ def worker_node(payload: dict) -> dict:
         for e in evidence[:20]
     )
 
-    section_md = llm.invoke(
+    response = llm.invoke(
         [
             SystemMessage(content=WORKER_SYSTEM),
             HumanMessage(
@@ -372,9 +379,15 @@ def worker_node(payload: dict) -> dict:
                 )
             ),
         ]
-    ).content.strip()
-
-    return {"sections": [(task.id, section_md)]}
+    )
+    
+    # Handle cases where .content might be a list
+    if isinstance(response.content, list):
+        section_md = "".join([part.get("text", "") if isinstance(part, dict) else str(part) for part in response.content])
+    else:
+        section_md = response.content
+        
+    return {"sections": [(task.id, section_md.strip())]}
 
 # ============================================================
 # 8) ReducerWithImages (subgraph)
@@ -443,19 +456,25 @@ def _gemini_generate_image_bytes(prompt: str) -> bytes:
 
     client = genai.Client(api_key=api_key)
 
-    resp = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
-            safety_settings=[
-                types.SafetySetting(
-                    category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                    threshold="BLOCK_ONLY_HIGH",
-                )
-            ],
-        ),
-    )
+    # Try gemini-2.0-flash if available for better image generation, fallback to flash-latest
+    try:
+        model_name = "gemini-2.0-flash"
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
+    except Exception:
+        model_name = "gemini-flash-latest"
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+            ),
+        )
 
     # Depending on SDK version, parts may hang off resp.candidates[0].content.parts
     parts = getattr(resp, "parts", None)
