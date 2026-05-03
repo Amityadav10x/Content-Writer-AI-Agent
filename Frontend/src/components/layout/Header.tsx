@@ -8,16 +8,28 @@ interface HeaderProps {
 
 export const Header = ({ status }: HeaderProps) => {
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-accent rounded-lg flex items-center justify-center">
-            <Sparkles className="w-5 h-5 text-white" />
+    <header className="sticky top-0 z-50 border-b border-white/5 bg-background/50 backdrop-blur-xl">
+      <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+        <div className="flex items-center gap-4 group cursor-default">
+          <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(59,130,246,0.3)] group-hover:scale-110 transition-transform duration-500">
+            <Sparkles className="w-6 h-6 text-white" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight">Blog<span className="text-accent">Agent</span></h1>
+          <div>
+            <h1 className="text-xl font-black tracking-tighter uppercase">
+              Blog<span className="text-gradient">Agent</span>
+            </h1>
+            <p className="text-[10px] font-bold text-muted tracking-[0.2em] uppercase -mt-1 opacity-50">
+              Autonomous Content Engine
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-6">
           {status && <StatusBadge status={status.status} />}
+          <div className="h-6 w-[1px] bg-white/10 hidden md:block" />
+          <button className="hidden md:flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg text-xs font-bold transition-all">
+            <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
+            System Online
+          </button>
         </div>
       </div>
     </header>
