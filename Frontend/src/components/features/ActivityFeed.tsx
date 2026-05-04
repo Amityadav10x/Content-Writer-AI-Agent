@@ -21,7 +21,7 @@ export const ActivityFeed = ({ logs }: ActivityFeedProps) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-2">
+      <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-2 h-[calc(100vh-28rem)]">
         <AnimatePresence initial={false}>
           {logs.length > 0 ? (
             [...logs].reverse().map((log, i) => (
