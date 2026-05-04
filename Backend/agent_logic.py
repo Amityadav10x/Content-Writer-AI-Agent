@@ -107,6 +107,10 @@ class State(TypedDict):
     md_with_placeholders: str
     image_specs: List[dict]
 
+    # memory
+    user_id: str
+    memory_context: Optional[Dict[str, List[Any]]]
+    
     final: str
 
 
@@ -253,11 +257,25 @@ def research_node(state: State) -> dict:
     print(f"Research node complete. Found {len(evidence)} evidence items.")
     return {"evidence": evidence, "queries": queries}
 
+def _format_memory(memory_context: Optional[Dict[str, List[Any]]], category: str) -> str:
+    if not memory_context or category not in memory_context:
+        return ""
+    signals = memory_context[category]
+    if not signals:
+        return ""
+    
+    lines = [f"- {s.key}: {s.value}" for s in signals]
+    return f"\n## {category.capitalize()} Memory Context\n" + "\n".join(lines) + "\n"
+
 # -----------------------------
 # 5) Orchestrator (Plan)
 # -----------------------------
-ORCH_SYSTEM = """You are a senior technical writer and developer advocate.
-Produce a highly actionable outline for a technical blog post.
+ORCH_SYSTEM = """You are a senior content strategist.
+Create a detailed, high-fidelity blog plan.
+
+{memory}
+
+Output in structured format.
 
 Requirements:
 - 5–9 tasks, each with goal + 3–6 bullets + target_words.
@@ -334,6 +352,8 @@ def fanout(state: State):
 WORKER_SYSTEM = """You are a senior technical writer and developer advocate.
 Write ONE section of a high-fidelity technical blog post in Markdown.
 
+{memory}
+
 Formatting Excellence:
 - Use clear, descriptive headers (## Title).
 - Use bold text for key concepts and technical terms.
@@ -354,7 +374,15 @@ Scope & Grounding:
 """
 
 def worker_node(payload: dict) -> dict:
-    task = Task(**payload["task"])
+    state: State = payload["state"]
+    task: Task = payload["task"]
+    
+    style_mem = _format_memory(state.get("memory_context"), "style")
+    behavior_mem = _format_memory(state.get("memory_context"), "behavior")
+    
+    mem_context = style_mem + behavior_mem
+    prompt = WORKER_SYSTEM.format(memory=mem_context)
+    
     plan = Plan(**payload["plan"])
     evidence = [EvidenceItem(**e) for e in payload.get("evidence", [])]
 
@@ -568,24 +596,82 @@ reducer_graph.add_edge("decide_images", "generate_and_place_images")
 reducer_graph.add_edge("generate_and_place_images", END)
 reducer_subgraph = reducer_graph.compile()
 
+class MemorySignalExtraction(BaseModel):
+    key: str = Field(description="The preference key (e.g., 'tone', 'niche', 'code_density')")
+    value: str = Field(description="The preference value (e.g., 'academic', 'AI', 'high')")
+    category: str = Field(description="Category: strategy, style, or behavior")
+    confidence: float = Field(description="Confidence score 0.0-1.0")
+    rationale: str = Field(description="Reasoning for this extraction")
+
+class MemorySignalPack(BaseModel):
+    signals: List[MemorySignalExtraction]
+
+EXTRACT_SYSTEM = """You are a senior analyst. 
+Analyze the generated blog post and the original topic to extract long-term user preferences.
+
+Focus on:
+1. Tone and Voice (Style)
+2. Content Depth and Niche (Strategy)
+3. Formatting and Structural patterns (Behavior)
+
+Ignore one-off details. Extract only durable signals.
+"""
+
+def extract_memory_node(state: State) -> dict:
+    print("Extracting memory signals from output...")
+    if not state.get("final"):
+        return {}
+
+    extractor = llm.with_structured_output(MemorySignalPack)
+    prompt = f"Topic: {state['topic']}\n\nGenerated Content:\n{state['final'][:5000]}"
+    
+    try:
+        pack = extractor.invoke([
+            ("system", EXTRACT_SYSTEM),
+            ("human", prompt)
+        ])
+        
+        for sig in pack.signals:
+            if sig.confidence >= 0.7:
+                signal_obj = MemorySignal(
+                    key=sig.key,
+                    value=sig.value,
+                    category=sig.category,
+                    importance=sig.confidence,
+                    confidence=sig.confidence
+                )
+                memory_manager.store_signal(state['user_id'], signal_obj, reason=sig.rationale)
+                print(f"Stored signal: {sig.key}={sig.value} (conf: {sig.confidence})")
+        
+        # Optional pruning
+        memory_manager.prune_memory(state['user_id'])
+        
+    except Exception as e:
+        print(f"Memory extraction error: {e}")
+
+    return {}
+
 # -----------------------------
 # 9) Build main graph
 # -----------------------------
 g = StateGraph(State)
+g.add_node("retrieve_memory", retrieve_memory_node)
 g.add_node("router", router_node)
 g.add_node("research", research_node)
 g.add_node("orchestrator", orchestrator_node)
 g.add_node("worker", worker_node)
 g.add_node("reducer", reducer_subgraph)
+g.add_node("extract_memory", extract_memory_node)
 
-g.add_edge(START, "router")
+g.add_edge(START, "retrieve_memory")
+g.add_edge("retrieve_memory", "router")
 g.add_conditional_edges("router", route_next, {"research": "research", "orchestrator": "orchestrator"})
 g.add_edge("research", "orchestrator")
 
 g.add_conditional_edges("orchestrator", fanout, ["worker"])
 g.add_edge("worker", "reducer")
-g.add_edge("reducer", END)
+g.add_edge("reducer", "extract_memory")
+g.add_edge("extract_memory", END)
 
 app = g.compile()
 app
-
