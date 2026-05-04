@@ -42,7 +42,9 @@ job_queues: Dict[str, List[asyncio.Queue]] = {}
 
 class GenerateRequest(BaseModel):
     topic: str
-    as_of: Optional[str] = None
+    mode: str = "open_book"
+    recency_days: int = 365
+    user_id: str = "default_user"
 
 async def notify_job_update(job_id: str):
     """Push the current job state to all active stream queues for this job."""
@@ -70,7 +72,7 @@ async def generate_blog(request: GenerateRequest, background_tasks: BackgroundTa
     }
     
     # Run agent in background
-    background_tasks.add_task(run_agent, job_id, request.topic, request.as_of)
+    background_tasks.add_task(run_agent, job_id, request.topic, None, request.user_id)
     
     return {"job_id": job_id}
 
@@ -112,11 +114,13 @@ async def stream_job(job_id: str):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-async def run_agent(job_id: str, topic: str, as_of: Optional[str]):
+async def run_agent(job_id: str, topic: str, as_of: Optional[str], user_id: str):
     try:
         inputs = {
             "topic": topic,
             "as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
+            "user_id": user_id,
+            "memory_context": None,
             "sections": [],
             "evidence": [],
             "queries": [],
