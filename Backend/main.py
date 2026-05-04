@@ -9,6 +9,10 @@ import asyncio
 import json
 import os
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from agent_logic import app as agent_app
 
 # Create images directory if not exists
@@ -27,6 +31,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+async def root():
+    return {"message": "Blog Writing Agent API is online", "status": "active"}
 
 # In-memory storage for jobs
 jobs: Dict[str, dict] = {}

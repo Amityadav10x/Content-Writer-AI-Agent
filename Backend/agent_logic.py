@@ -116,7 +116,7 @@ class State(TypedDict):
 # -----------------------------
 # 2) LLM
 # -----------------------------
-llm = ChatGoogleGenerativeAI(model="gemini-flash-latest")
+llm = ChatGoogleGenerativeAI(model="gemini-flash-latest", google_api_key=os.getenv("GOOGLE_API_KEY"))
 
 # -----------------------------
 # 3) Router
