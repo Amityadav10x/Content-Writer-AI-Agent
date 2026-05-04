@@ -168,15 +168,18 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
     if not os.getenv("TAVILY_API_KEY"):
         return []
     try:
-        # Try modern import first
-        try:
-            from langchain_tavily import TavilySearchResults
-            tool = TavilySearchResults(max_results=max_results)
-        except ImportError:
+        # Prioritize the modern langchain-tavily package
+        from langchain_tavily import TavilySearchResults
+        tool = TavilySearchResults(max_results=max_results)
+        results = tool.invoke({"query": query})
+    except (ImportError, Exception):
+        # Fallback to community package with suppressed warning if possible
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
             from langchain_community.tools.tavily_search import TavilySearchResults
             tool = TavilySearchResults(max_results=max_results)
-            
-        results = tool.invoke({"query": query})
+            results = tool.invoke({"query": query})
         out: List[dict] = []
         for r in results or []:
             out.append(
@@ -247,6 +250,7 @@ def research_node(state: State) -> dict:
         cutoff = as_of - timedelta(days=int(state["recency_days"]))
         evidence = [e for e in evidence if (d := _iso_to_date(e.published_at)) and d >= cutoff]
 
+    print(f"Research node complete. Found {len(evidence)} evidence items.")
     return {"evidence": evidence, "queries": queries}
 
 # -----------------------------
@@ -291,9 +295,15 @@ def orchestrator_node(state: State) -> dict:
             ),
         ]
     )
+    if not plan.tasks:
+        print("WARNING: Orchestrator generated an empty plan!")
+        # Add a default task to prevent the graph from stalling
+        plan.tasks = [Task(id=1, title="General Overview", goal="Provide a summary of the topic.", bullets=["Introduction", "Key points", "Conclusion"], target_words=300)]
+        
     if forced_kind:
         plan.blog_kind = "news_roundup"
 
+    print(f"Orchestrator node complete. Created plan with {len(plan.tasks)} tasks.")
     return {"plan": plan}
 
 
@@ -387,6 +397,7 @@ def worker_node(payload: dict) -> dict:
     else:
         section_md = response.content
         
+    print(f"Worker node complete for task: {task.title}")
     return {"sections": [(task.id, section_md.strip())]}
 
 # ============================================================
