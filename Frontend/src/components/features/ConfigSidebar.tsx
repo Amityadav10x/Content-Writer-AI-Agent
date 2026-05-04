@@ -17,7 +17,7 @@ export const ConfigSidebar = ({ topic, setTopic, isGenerating, onGenerate }: Con
         <h3 className="text-sm font-black uppercase tracking-[0.2em] text-white">Config_Panel</h3>
       </div>
 
-      <div className="space-y-8 flex-1">
+      <div className="space-y-8 flex-1 overflow-y-auto custom-scrollbar pr-2 h-[calc(100vh-26rem)]">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted">Topic Specification</label>
