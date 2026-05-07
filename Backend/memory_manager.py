@@ -157,7 +157,6 @@ class MemoryManager:
                     version = existing[1] + 1
                 else:
                     version = existing[1]
-
                 conn.execute("""
                     UPDATE user_memory SET 
                         value = ?, frequency = frequency + 1, last_seen = ?, 
