@@ -5,7 +5,7 @@ import os
 import re
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TypedDict, List, Optional, Literal, Annotated
+from typing import TypedDict, List, Optional, Literal, Annotated, Dict, Any
 
 from pydantic import BaseModel, Field
 
@@ -15,8 +15,11 @@ from langgraph.types import Send
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from dotenv import load_dotenv
+from memory_manager import MemoryManager, MemorySignal
 
 load_dotenv()
+
+memory_manager = MemoryManager()
 
 # ============================================================
 # Blog Writer (Router → (Research?) → Orchestrator → Workers → ReducerWithImages)
@@ -115,9 +118,6 @@ class State(TypedDict):
 
 
 # -----------------------------
-# 2) LLM & Mocking
-# -----------------------------
-# -----------------------------
 # 2) LLM
 # -----------------------------
 llm = ChatGoogleGenerativeAI(model="gemini-flash-latest", google_api_key=os.getenv("GOOGLE_API_KEY"))
@@ -140,6 +140,7 @@ If needs_research=true:
 """
 
 def router_node(state: State) -> dict:
+    print(f"\n[ROUTER] Analyzing topic: {state['topic']}")
     decider = llm.with_structured_output(RouterDecision)
     decision = decider.invoke(
         [
@@ -155,12 +156,14 @@ def router_node(state: State) -> dict:
     else:
         recency_days = 3650
 
-    return {
+    result = {
         "needs_research": decision.needs_research,
         "mode": decision.mode,
         "queries": decision.queries,
         "recency_days": recency_days,
     }
+    print(f"[ROUTER] Done. Mode: {decision.mode}, Research: {decision.needs_research}")
+    return result
 
 def route_next(state: State) -> str:
     return "research" if state["needs_research"] else "orchestrator"
@@ -172,32 +175,27 @@ def _tavily_search(query: str, max_results: int = 5) -> List[dict]:
     if not os.getenv("TAVILY_API_KEY"):
         return []
     try:
-        # Prioritize the modern langchain-tavily package
-        from langchain_tavily import TavilySearchResults
+        try:
+            from langchain_tavily import TavilySearchResults
+        except ImportError:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                from langchain_community.tools.tavily_search import TavilySearchResults
         tool = TavilySearchResults(max_results=max_results)
-        results = tool.invoke({"query": query})
-    except (ImportError, Exception):
-        # Fallback to community package with suppressed warning if possible
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            from langchain_community.tools.tavily_search import TavilySearchResults
-            tool = TavilySearchResults(max_results=max_results)
-            results = tool.invoke({"query": query})
+        results = tool.invoke({"query": query}) or []
         out: List[dict] = []
-        for r in results or []:
-            out.append(
-                {
-                    "title": r.get("title") or "",
-                    "url": r.get("url") or "",
-                    "snippet": r.get("content") or r.get("snippet") or "",
-                    "published_at": r.get("published_date") or r.get("published_at"),
-                    "source": r.get("source"),
-                }
-            )
+        for r in results:
+            out.append({
+                "title": r.get("title") or "",
+                "url": r.get("url") or "",
+                "snippet": r.get("content") or r.get("snippet") or "",
+                "published_at": r.get("published_date") or r.get("published_at"),
+                "source": r.get("source"),
+            })
         return out
     except Exception as e:
-        print(f"Tavily error: {e}")
+        print(f"[RESEARCH] Tavily error for query '{query}': {e}")
         return []
 
 def _iso_to_date(s: Optional[str]) -> Optional[date]:
@@ -221,12 +219,14 @@ Rules:
 """
 
 def research_node(state: State) -> dict:
+    print(f"\n[RESEARCH] Executing queries: {state['queries']}")
     queries = (state.get("queries") or [])[:10]
     raw: List[dict] = []
     for q in queries:
         raw.extend(_tavily_search(q, max_results=6))
 
     if not raw:
+        print("[RESEARCH] Done. No evidence found.")
         return {"evidence": []}
 
     extractor = llm.with_structured_output(EvidencePack)
@@ -293,6 +293,7 @@ Output must match Plan schema.
 """
 
 def orchestrator_node(state: State) -> dict:
+    print(f"\n[ORCHESTRATOR] Planning blog structure for topic: {state['topic']}")
     planner = llm.with_structured_output(Plan)
     mode = state.get("mode", "closed_book")
     evidence = state.get("evidence", [])
@@ -341,6 +342,7 @@ def fanout(state: State):
                 "recency_days": state["recency_days"],
                 "plan": state["plan"].model_dump(),
                 "evidence": [e.model_dump() for e in state.get("evidence", [])],
+                "memory_context": state.get("memory_context"),  # pass personalization to each worker
             },
         )
         for task in state["plan"].tasks
@@ -374,15 +376,17 @@ Scope & Grounding:
 """
 
 def worker_node(payload: dict) -> dict:
-    state: State = payload["state"]
-    task: Task = payload["task"]
-    
-    style_mem = _format_memory(state.get("memory_context"), "style")
-    behavior_mem = _format_memory(state.get("memory_context"), "behavior")
+    # fanout sends a flat dict — the payload IS the context, no nested "state" key
+    task: Task = Task(**payload["task"])
+    print(f"\n[WORKER] Writing section: {task.title}")
+
+    memory_context = payload.get("memory_context")
+    style_mem = _format_memory(memory_context, "style")
+    behavior_mem = _format_memory(memory_context, "behavior")
     
     mem_context = style_mem + behavior_mem
     prompt = WORKER_SYSTEM.format(memory=mem_context)
-    
+
     plan = Plan(**payload["plan"])
     evidence = [EvidenceItem(**e) for e in payload.get("evidence", [])]
 
@@ -425,7 +429,7 @@ def worker_node(payload: dict) -> dict:
     else:
         section_md = response.content
         
-    print(f"Worker node complete for task: {task.title}")
+    print(f"[WORKER] Done for task: {task.title}")
     return {"sections": [(task.id, section_md.strip())]}
 
 # ============================================================
@@ -433,12 +437,14 @@ def worker_node(payload: dict) -> dict:
 #    merge_content -> decide_images -> generate_and_place_images
 # ============================================================
 def merge_content(state: State) -> dict:
+    print(f"\n[REDUCER] Merging {len(state['sections'])} sections.")
     plan = state["plan"]
     if plan is None:
         raise ValueError("merge_content called without plan.")
     ordered_sections = [md for _, md in sorted(state["sections"], key=lambda x: x[0])]
     body = "\n\n".join(ordered_sections).strip()
     merged_md = f"# {plan.blog_title}\n\n{body}\n"
+    print("[REDUCER] Merge complete.")
     return {"merged_md": merged_md}
 
 
@@ -455,6 +461,7 @@ Return strictly GlobalImagePlan.
 """
 
 def decide_images(state: State) -> dict:
+    print("[REDUCER] Deciding images...")
     planner = llm.with_structured_output(GlobalImagePlan)
     merged_md = state["merged_md"]
     plan = state["plan"]
@@ -474,6 +481,7 @@ def decide_images(state: State) -> dict:
         ]
     )
 
+    print(f"[REDUCER] Image plan decided: {len(image_plan.images)} images.")
     return {
         "md_with_placeholders": image_plan.md_with_placeholders,
         "image_specs": [img.model_dump() for img in image_plan.images],
@@ -542,6 +550,7 @@ def _safe_slug(title: str) -> str:
 
 
 def generate_and_place_images(state: State) -> dict:
+    print("[REDUCER] Generating and placing images...")
     plan = state["plan"]
     assert plan is not None
 
@@ -552,6 +561,7 @@ def generate_and_place_images(state: State) -> dict:
     if not image_specs:
         filename = f"{_safe_slug(plan.blog_title)}.md"
         Path(filename).write_text(md, encoding="utf-8")
+        print("[REDUCER] Done. No images generated.")
         return {"final": md}
 
     images_dir = Path("images")
@@ -583,6 +593,7 @@ def generate_and_place_images(state: State) -> dict:
 
     filename = f"{_safe_slug(plan.blog_title)}.md"
     Path(filename).write_text(md, encoding="utf-8")
+    print("[REDUCER] Done. Images placed.")
     return {"final": md}
 
 # build reducer subgraph
@@ -617,8 +628,15 @@ Focus on:
 Ignore one-off details. Extract only durable signals.
 """
 
+def retrieve_memory_node(state: State) -> dict:
+    print(f"\n[MEMORY] Retrieving context for user: {state.get('user_id', 'default')}")
+    user_id = state.get('user_id', 'default')
+    context = memory_manager.retrieve_relevant_memory(user_id, state['topic'])
+    print("[MEMORY] Retrieval complete.")
+    return {"memory_context": context}
+
 def extract_memory_node(state: State) -> dict:
-    print("Extracting memory signals from output...")
+    print("\n[MEMORY] Extracting memory signals...")
     if not state.get("final"):
         return {}
 
