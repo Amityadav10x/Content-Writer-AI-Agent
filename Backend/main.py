@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent_logic import app as agent_app
+# Graph and checkpointer will be initialized per-request to support resuming
 
 # Create images directory if not exists
 os.makedirs("images", exist_ok=True)
@@ -142,6 +142,9 @@ async def cancel_job(job_id: str):
 
 
 async def run_agent(job_id: str, topic: str, as_of: Optional[str], user_id: str):
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from agent_logic import g # Get raw graph
+    
     print(f"\n{'='*60}")
     print(f">>> [WORKFLOW START]")
     print(f"    Thread : {job_id}")
@@ -149,43 +152,55 @@ async def run_agent(job_id: str, topic: str, as_of: Optional[str], user_id: str)
     print(f"{'='*60}")
 
     try:
-        inputs = {
-            "topic": topic,
-            "as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
-            "user_id": user_id,
-            "memory_context": None,
-            "sections": [],
-            "evidence": [],
-            "queries": [],
-            "needs_research": False,
-            "mode": "closed_book",
-        }
+        async with AsyncSqliteSaver.from_conn_string("checkpoints.db") as saver:
+            agent_app = g.compile(checkpointer=saver)
+            config = {"configurable": {"thread_id": job_id}, "recursion_limit": 50}
+            
+            # Check for existing state to resume
+            state = await agent_app.aget_state(config)
+            
+            if state.values:
+                print(f"  [RESUME] Found existing state for thread {job_id}. Continuing...")
+                inputs = None # Resuming
+            else:
+                inputs = {
+                    "topic": topic,
+                    "as_of": as_of or datetime.now().strftime("%Y-%m-%d"),
+                    "user_id": user_id,
+                    "memory_context": None,
+                    "sections": [],
+                    "evidence": [],
+                    "queries": [],
+                    "needs_research": False,
+                    "mode": "closed_book",
+                }
 
-        jobs[job_id]["status"] = "running"
-        await push_event(job_id, {"type": "status", "data": {"status": "running"}})
+            jobs[job_id]["status"] = "running"
+            await push_event(job_id, {"type": "status", "data": {"status": "running"}})
 
-        final_content = ""
+            final_content = ""
 
-        # Single streaming pass — no second ainvoke
-        async for event in agent_app.astream_events(inputs, version="v2"):
+            # Run the graph with checkpointer support
+            async for event in agent_app.astream_events(inputs, config=config, version="v2"):
             kind = event["event"]
             name = event.get("name", "")
 
             # ── Node lifecycle ────────────────────────────────────────────
             if kind == "on_chain_start" and name in TRACKED_NODES:
-                print(f"\n  ┌─ [NODE START] {name.upper()}")
+                print(f"\n  [NODE START] {name.upper()}")
                 await push_event(job_id, {"type": "node_start", "data": {"node": name}})
 
             if kind == "on_chain_end" and name in TRACKED_NODES:
+                # Only check reducer for final content; never send full output (can be huge)
                 raw_output = event["data"].get("output", {})
-                safe_output = safe_serialize(raw_output)
 
                 # Capture the final blog markdown from the reducer
-                if name == "reducer" and isinstance(safe_output, dict):
-                    final_content = safe_output.get("final", final_content)
+                if name == "reducer" and isinstance(raw_output, dict):
+                    final_content = raw_output.get("final", final_content)
 
-                print(f"  └─ [NODE END]   {name.upper()}")
-                await push_event(job_id, {"type": "node_end", "data": {"node": name, "output": safe_output}})
+                print(f"  [NODE END]   {name.upper()}")
+                # Send lightweight node_end (no full output — it can be MBs)
+                await push_event(job_id, {"type": "node_end", "data": {"node": name}})
 
             # ── Token-level streaming ────────────────────────────────────
             if kind == "on_chat_model_stream":
