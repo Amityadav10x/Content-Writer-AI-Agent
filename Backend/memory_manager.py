@@ -58,16 +58,30 @@ class MemoryManager:
     def _get_embedding(self, text: str) -> List[float]:
         if not self.client:
             return []
-        try:
-            res = self.client.models.embed_content(
-                model="text-embedding-004",
-                contents=text,
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-            )
-            return res.embeddings[0].values
-        except Exception as e:
-            print(f"Embedding error: {e}")
-            return []
+        # List of models to try in order of preference (verified from list_models.py)
+        models_to_try = [
+            "gemini-embedding-2", 
+            "models/gemini-embedding-2", 
+            "gemini-embedding-001", 
+            "models/gemini-embedding-001"
+        ]
+        
+        last_error = None
+        for model_name in models_to_try:
+            try:
+                res = self.client.models.embed_content(
+                    model=model_name,
+                    contents=text,
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                )
+                return res.embeddings[0].values
+            except Exception as e:
+                last_error = e
+                continue
+        
+        if last_error:
+            print(f"Embedding error (all models failed): {last_error}")
+        return []
 
     def _cosine_similarity(self, v1: List[float], v2: List[float]) -> float:
         if not v1 or not v2: return 0.0
