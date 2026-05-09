@@ -1,17 +1,47 @@
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { ChatInterface } from './components/chat/ChatInterface';
 import { ArtifactWorkspace } from './components/workspace/ArtifactWorkspace';
 import { ReasoningTimeline } from './components/observability/ReasoningTimeline';
 import { Header } from './components/layout/Header';
 import { GlassCard } from './components/shared/GlassCard';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
-import { Terminal, History, Plus } from 'lucide-react';
+import { Terminal, History, Plus, AlertCircle } from 'lucide-react';
 
 function App() {
-  const { resetWorkspace, threadId } = useWorkspaceStore();
+  const { resetWorkspace, threadId, error, setError } = useWorkspaceStore();
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden selection:bg-accent/30 selection:text-white">
+      {/* Global Error Toast */}
+      <AnimatePresence>
+        {error && (
+          <motion.div 
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4"
+          >
+            <div className="bg-red-500/10 border border-red-500/20 backdrop-blur-xl p-4 rounded-2xl flex items-center justify-between shadow-2xl">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center">
+                  <AlertCircle className="w-4 h-4 text-red-500" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-red-500/50">System Error</p>
+                  <p className="text-xs font-bold text-white line-clamp-1">{error}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setError(null)}
+                className="p-2 hover:bg-white/5 rounded-lg transition-colors"
+              >
+                <Plus className="w-4 h-4 text-white/20 rotate-45" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Background Effects */}
       <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden opacity-30">
         <div className="absolute inset-0 noise-bg" />
