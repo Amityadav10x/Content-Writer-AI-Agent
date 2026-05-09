@@ -120,10 +120,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'blog-workspace-storage',
-      partialize: (state) => ({ 
-        threadId: state.threadId, 
-        messages: state.messages, 
-        artifactContent: state.artifactContent 
+      version: 2, // bump to invalidate stale persisted state
+      migrate: (_persistedState, _version) => {
+        // On schema change, reset to clean defaults
+        return {
+          threadId: null,
+          messages: [],
+          artifactContent: '',
+        };
+      },
+      partialize: (state) => ({
+        threadId: state.threadId,
+        messages: state.messages.map(m => ({
+          // Sanitize messages before persisting — drop non-serializable fields
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          status: m.status === 'streaming' ? 'complete' : m.status, // never persist streaming state
+          timestamp: m.timestamp,
+        })),
+        artifactContent: state.artifactContent,
       }),
     }
   )
