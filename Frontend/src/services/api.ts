@@ -12,17 +12,21 @@ export const blogApi = {
         as_of: new Date().toISOString().split('T')[0],
       }),
     });
-    if (!response.ok) throw new Error('Network response was not ok');
+    if (!response.ok) throw new Error(`Server error: ${response.status}`);
     return response.json();
   },
 
   getStatus: async (jobId: string): Promise<JobStatus> => {
     const response = await fetch(`${API_BASE_URL}/status/${jobId}`);
-    if (!response.ok) throw new Error('Network response was not ok');
+    if (!response.ok) throw new Error(`Server error: ${response.status}`);
     return response.json();
   },
 
   getStreamUrl: (jobId: string): string => {
     return `${API_BASE_URL}/stream/${jobId}`;
+  },
+
+  cancel: async (jobId: string): Promise<void> => {
+    await fetch(`${API_BASE_URL}/cancel/${jobId}`, { method: 'POST' });
   },
 };
