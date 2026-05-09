@@ -73,13 +73,11 @@ export class StreamHandler {
 
           // ── Node finished ───────────────────────────────────────────────
           case 'node_end': {
-            const { node, output } = data;
+            const { node } = data;
             console.log('[SSE] Node ended:', node);
             store.setNodeStatus(node, 'completed');
-            // Capture final content when the reducer completes
-            if ((node === 'reducer' || node === 'generate_and_place_images') && output?.final) {
-              store.setArtifactContent(output.final);
-            }
+            // Note: final content comes via 'artifact_complete', not from node_end output
+            // (node_end output can be very large and non-serializable)
             break;
           }
 
