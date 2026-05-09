@@ -41,9 +41,11 @@ export const ReasoningTimeline: React.FC = () => {
         {/* Connection Line */}
         <div className="absolute left-[17px] top-4 bottom-4 w-[1px] bg-white/5" />
 
-        {Object.values(nodes).map((node, index) => (
+        {Object.values(nodes)
+          .sort((a, b) => (a.startTime || 0) - (b.startTime || 0))
+          .map((node, index) => (
           <motion.div 
-            key={node.id}
+            key={node.id || `node-${index}`}
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.1 }}
@@ -64,7 +66,7 @@ export const ReasoningTimeline: React.FC = () => {
             <div className="flex-1">
               <div className="flex items-center justify-between">
                 <span className={`text-xs font-bold tracking-tight transition-colors ${node.status === 'running' ? 'text-white' : 'text-muted'}`}>
-                  {node.label}
+                  {node.label || node.id}
                 </span>
                 {node.startTime && (
                   <span className="text-[9px] font-mono opacity-30">
