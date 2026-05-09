@@ -52,7 +52,21 @@ export const ArtifactWorkspace: React.FC = () => {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-8 md:p-12 custom-scrollbar selection:bg-accent/30">
         <AnimatePresence mode="wait">
-          {!artifactContent && isGenerating ? (
+          {!artifactContent && !isGenerating ? (
+            // Empty state
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-30"
+            >
+              <FileText className="w-12 h-12 text-muted" />
+              <div>
+                <p className="text-sm font-bold text-white uppercase tracking-widest">Artifact Workspace</p>
+                <p className="text-xs text-muted mt-1">Your generated blog will appear here</p>
+              </div>
+            </motion.div>
+          ) : !artifactContent && isGenerating ? (
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
